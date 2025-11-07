@@ -1,0 +1,30 @@
+"""
+Spring-Ready Python
+A lightweight library to make Python apps Spring Boot ecosystem compatible.
+
+Provides:
+- Eureka service registration
+- Config Server integration with discovery
+- Actuator endpoints (health, info, prometheus)
+- FastAPI integration
+
+Usage:
+    from spring_ready import SpringReadyApp
+
+    app = SpringReadyApp()
+"""
+
+from .core import SpringReadyApp
+from .exceptions import (
+    SpringReadyException,
+    EurekaRegistrationError,
+    ConfigServerError,
+)
+
+__version__ = "0.1.0"
+__all__ = [
+    "SpringReadyApp",
+    "SpringReadyException",
+    "EurekaRegistrationError",
+    "ConfigServerError",
+]

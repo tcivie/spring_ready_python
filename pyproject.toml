@@ -1,0 +1,73 @@
+[build-system]
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "spring-ready-python"
+dynamic = ["version"]
+authors = [
+  { name="Gleb Tcivie", email="gleb@tcivie.com" },
+]
+description = "Make Python FastAPI apps work with Spring Boot ecosystem (Eureka, Config Server, Actuator)"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Framework :: FastAPI",
+]
+keywords = ["spring-boot", "eureka", "config-server", "actuator", "prometheus", "microservices", "fastapi"]
+license = "MIT"
+dependencies = [
+    "fastapi>=0.100.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+config = [
+    "spring-config-client-python>=0.1.0",
+]
+metrics = [
+    "prometheus-client>=0.19.0",
+]
+all = [
+    "spring-config-client-python>=0.1.0",
+    "prometheus-client>=0.19.0",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.24.0",  # For FastAPI testing
+    "uvicorn>=0.23.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/tcivie/spring-ready-python"
+Issues = "https://github.com/tcivie/spring-ready-python/issues"
+
+[tool.hatch.version]
+path = "spring_ready/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["spring_ready"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--cov=spring_ready",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]

@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  python-service:
+    build: .
+    image: spring-ready-python-example:latest
+    container_name: python-service
+    ports:
+      - "8080:8080"
+    environment:
+      # Application configuration
+      - SPRING_APPLICATION_NAME=python-service
+      - APP_PORT=8080
+      - SPRING_PROFILES_ACTIVE=production
+
+      # Eureka configuration
+      - EUREKA_SERVER_URL=http://eureka:8761/eureka/
+
+      # Config Server (optional - will be discovered from Eureka)
+      # - CONFIG_SERVER_URI=http://config-server:8888
+      # - CONFIG_SERVER_USERNAME=admin
+      # - CONFIG_SERVER_PASSWORD=secret
+
+    depends_on:
+      - eureka
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - spring-network
+
+networks:
+  spring-network:
+    driver: bridge
