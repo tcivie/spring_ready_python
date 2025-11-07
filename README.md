@@ -416,22 +416,6 @@ spring_app.start()
 # Configuration from environment variables
 ```
 
-Both achieve the same result: a service registered in Eureka with Config Server integration and actuator endpoints.
-
-## Why Not Use py-eureka-client?
-
-We rolled our own Eureka client because:
-- Full control over retry behavior to match Spring
-- No external dependencies (just `requests`)
-- You can see exactly what's happening
-- Easier to debug in production
-- Matches Spring Boot's behavior precisely
-
-## Support
-
-- GitHub Issues: https://github.com/your-repo/spring-ready-python
-- Documentation: https://spring-ready-python.readthedocs.io/
-
 ---
 
 **Note**: This library focuses on making Python apps work with existing Spring Boot infrastructure. It's not a replacement for Spring Boot itself.
