@@ -111,6 +111,50 @@ async def create_data(item: dict):
     return {"status": "created", "item": item}
 
 
+@app.get("/api/discover/{service_name}")
+async def discover_service(service_name: str):
+    """
+    Discover a service from Eureka and get its URL.
+
+    Example: GET /api/discover/config-server
+    Returns the base URL of the service registered in Eureka.
+
+    This is super easy! Just one line to get any service URL:
+        url = spring_app.service_discovery.get_service_url("config-server")
+    """
+    try:
+        # Simple one-liner to get service URL
+        url = spring_app.service_discovery.get_service_url(service_name.upper())
+
+        # You can also get detailed instance information
+        instance = spring_app.service_discovery.get_instance(service_name.upper())
+
+        return {
+            "service": service_name,
+            "url": url,
+            "instance_id": instance.instance_id,
+            "status": instance.status,
+            "metadata": instance.metadata
+        }
+    except Exception as e:
+        return {"error": str(e), "service": service_name}
+
+
+@app.get("/api/services")
+async def list_services():
+    """
+    List all services registered in Eureka.
+
+    Example: GET /api/services
+    Returns a list of all available services.
+    """
+    services = spring_app.service_discovery.list_services()
+    return {
+        "total": len(services),
+        "services": services
+    }
+
+
 
 # That's it! You get for free:
 # - Eureka service registration with heartbeat
