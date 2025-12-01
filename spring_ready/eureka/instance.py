@@ -97,7 +97,8 @@ class InstanceInfo:
             port: int = 8080,
             secure_port: int = 443,
             metadata: Optional[Dict[str, str]] = None,
-            prefer_ip_address: bool = True
+            prefer_ip_address: bool = True,
+            secure: bool = False
     ) -> "InstanceInfo":
         """
         Factory method to create InstanceInfo with sensible defaults.
@@ -111,6 +112,7 @@ class InstanceInfo:
             secure_port: HTTPS port
             metadata: Additional metadata
             prefer_ip_address: Use IP address instead of hostname
+            secure: If True, register with HTTPS URLs and enable secure port
         """
 
         # Auto-detect hostname and IP
@@ -131,8 +133,10 @@ class InstanceInfo:
         if not instance_id:
             instance_id = f"{app_name.lower()}:{host_name}:{port}"
 
-        # Build URLs
-        base_url = f"http://{ip_addr}:{port}"
+        # Build URLs based on secure flag
+        protocol = "https" if secure else "http"
+        actual_port = secure_port if secure else port
+        base_url = f"{protocol}://{ip_addr}:{actual_port}"
 
         return cls(
             app=app_name.upper(),
@@ -142,7 +146,9 @@ class InstanceInfo:
             vip_address=app_name.lower(),
             secure_vip_address=app_name.lower(),
             port=port,
-            secure_port=secure_port,
+            secure_port=secure_port if secure else 443,
+            port_enabled=not secure,
+            secure_port_enabled=secure,
             home_page_url=base_url,
             status_page_url=f"{base_url}/actuator/info",
             health_check_url=f"{base_url}/actuator/health",

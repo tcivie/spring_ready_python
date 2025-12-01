@@ -92,6 +92,7 @@ CONFIG_SERVER_PASSWORD=secret
 | `EUREKA_SERVER_URL` | Eureka server URL(s) | `http://localhost:8761/eureka/` | `http://eureka:8761/eureka/` |
 | `EUREKA_INSTANCE_IP` | Custom IP for registration | Auto-detected | `192.168.1.100` |
 | `EUREKA_INSTANCE_HOSTNAME` | Custom hostname | Auto-detected | `my-service.local` |
+| `EUREKA_INSTANCE_SECURE` | Register with HTTPS URLs | `false` | `true` |
 | `CONFIG_SERVER_URI` | Config Server URL | Discovered from Eureka | `http://config:8888` |
 | `CONFIG_SERVER_SERVICE_ID` | Config Server service ID | `CONFIG-SERVER` | `CONFIG-SERVER` |
 | `CONFIG_SERVER_USERNAME` | Config Server username | None | `admin` |
@@ -195,6 +196,41 @@ Or via environment variables:
 ```bash
 export EUREKA_INSTANCE_IP=192.168.1.100
 export EUREKA_INSTANCE_HOSTNAME=my-service.example.com
+```
+
+### HTTPS Registration (Secure Mode)
+
+When your application uses HTTPS, you need to register with HTTPS URLs in Eureka so that Spring Boot Admin and other services can connect to it correctly.
+
+```python
+from spring_ready import SpringReadyApp
+
+# Register with HTTPS URLs in Eureka
+spring_app = SpringReadyApp(
+    app=app,
+    app_name="my-service",
+    app_port=8443,
+    secure=True  # Register with https:// URLs
+)
+spring_app.start()
+```
+
+Or via environment variable:
+```bash
+export EUREKA_INSTANCE_SECURE=true
+```
+
+When `secure=True`:
+- The `homePageUrl`, `statusPageUrl`, and `healthCheckUrl` will use `https://`
+- The `securePort` will be enabled and set to your `app_port`
+- The regular `port` will be disabled
+
+This is equivalent to Spring Boot's:
+```yaml
+eureka:
+  instance:
+    secure-port-enabled: true
+    non-secure-port-enabled: false
 ```
 
 ## How It Works
