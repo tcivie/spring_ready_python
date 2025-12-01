@@ -59,7 +59,8 @@ class SpringReadyApp:
             prefer_ip_address: bool = True,
             instance_ip: Optional[str] = None,
             instance_hostname: Optional[str] = None,
-            instance_metadata: Optional[dict] = None
+            instance_metadata: Optional[dict] = None,
+            secure: bool = False
     ):
         """
         Args:
@@ -73,6 +74,7 @@ class SpringReadyApp:
             instance_ip: Custom IP address to register with Eureka (auto-detected if None)
             instance_hostname: Custom hostname to register with Eureka (auto-detected if None)
             instance_metadata: Additional metadata for Eureka instance
+            secure: If True, register with HTTPS URLs (default from env EUREKA_INSTANCE_SECURE)
         """
         # Configuration from environment variables or parameters
         self.app_name = app_name or os.getenv("SPRING_APPLICATION_NAME") or os.getenv("APP_NAME", "python-service")
@@ -82,6 +84,12 @@ class SpringReadyApp:
         self.prefer_ip_address = prefer_ip_address
         self.instance_ip = instance_ip or os.getenv("EUREKA_INSTANCE_IP")
         self.instance_hostname = instance_hostname or os.getenv("EUREKA_INSTANCE_HOSTNAME")
+        self.secure = secure or os.getenv("EUREKA_INSTANCE_SECURE", "false").lower() == "true"
+
+        # Testing mode - disables Eureka and Config Server connections
+        self.testing_mode = os.getenv("TESTING", "0") == "1"
+        if self.testing_mode:
+            logger.info("TESTING mode enabled - Eureka and Config Server connections will be disabled")
 
         # Parse Eureka servers
         if eureka_servers is None:
@@ -146,14 +154,29 @@ class SpringReadyApp:
         logger.info(f"Starting Spring-Ready application: {self.app_name}")
 
         try:
+            # If testing mode is enabled, skip Eureka and Config Server setup
+            if self.testing_mode:
+                logger.info("Running in TESTING mode - skipping Eureka and Config Server setup")
+
+                # Only set up actuator endpoints
+                logger.info("Setting up actuator endpoints...")
+                self._setup_actuator_endpoints()
+
+                self._started = True
+                logger.info(f"✓ Spring-Ready application started successfully in TESTING mode on port {self.app_port}")
+                logger.info(f"  Actuator: http://localhost:{self.app_port}/actuator/health")
+                return
+
             # Step 1: Create Eureka instance info
             instance_info = InstanceInfo.create(
                 app_name=self.app_name,
                 port=self.app_port,
+                secure_port=self.app_port,  # Use same port for HTTPS
                 prefer_ip_address=self.prefer_ip_address,
                 ip_addr=self.instance_ip,
                 host_name=self.instance_hostname,
-                metadata=self._get_instance_metadata()
+                metadata=self._get_instance_metadata(),
+                secure=self.secure
             )
 
             # Log instance registration details
@@ -163,9 +186,12 @@ class SpringReadyApp:
                 logger.info(f"Auto-detected IP address for Eureka registration: {instance_info.ip_addr}")
 
             logger.info(f"Instance will register as: {instance_info.instance_id}")
+            if self.secure:
+                logger.info(f"Secure mode enabled - registering with HTTPS URLs")
 
             # Configure FastAPI OpenAPI servers to use the correct service URL
-            service_url = f"http://{instance_info.ip_addr}:{self.app_port}"
+            protocol = "https" if self.secure else "http"
+            service_url = f"{protocol}://{instance_info.ip_addr}:{self.app_port}"
             self.fastapi_app.servers = [{"url": service_url, "description": "Service instance"}]
             logger.info(f"Configured OpenAPI server URL: {service_url}")
 
@@ -309,8 +335,13 @@ class SpringReadyApp:
 
         # Build base URL for actuator discovery
         # Try to use instance_ip if available, otherwise use localhost
-        host = self.instance_ip if self.instance_ip else "localhost"
-        base_url = f"http://{host}:{self.app_port}"
+        # In testing mode, always use localhost since we don't connect to Eureka
+        if self.testing_mode:
+            host = "localhost"
+        else:
+            host = self.instance_ip if self.instance_ip else "localhost"
+        protocol = "https" if self.secure else "http"
+        base_url = f"{protocol}://{host}:{self.app_port}"
 
         # Integrate with FastAPI (CORS and middleware already set up in __init__)
         self.actuator_integration = FastAPIActuatorIntegration(
