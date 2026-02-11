@@ -11,7 +11,7 @@ from typing import Optional, List
 
 from .client import EurekaClient
 from .instance import InstanceInfo, InstanceStatus
-from ..exceptions import EurekaRegistrationError, EurekaHeartbeatError
+from ..exceptions import EurekaRegistrationError, EurekaHeartbeatError, EurekaInstanceNotFoundError
 from ..retry import retry_with_backoff, RetryConfig
 
 logger = logging.getLogger(__name__)
@@ -76,13 +76,13 @@ class EurekaRegistry:
         )
 
         if not self._registered:
-            logger.warning("Failed to register with Eureka, but continuing anyway")
-            return
+            logger.warning("Failed to register with Eureka, heartbeat thread will retry registration")
 
-        # Start heartbeat thread
+        # Always start heartbeat thread — it will retry registration if needed
         self._start_heartbeat_thread()
 
-        logger.info(f"Eureka registration completed for {self.instance.instance_id}")
+        if self._registered:
+            logger.info(f"Eureka registration completed for {self.instance.instance_id}")
 
     def _start_heartbeat_thread(self) -> None:
         """Start background thread for sending heartbeats"""
@@ -100,6 +100,23 @@ class EurekaRegistry:
 
         logger.info("Heartbeat thread started")
 
+    def _attempt_reregistration(self) -> bool:
+        """
+        Attempt to re-register with Eureka after instance was evicted or server restarted.
+
+        Returns:
+            True if re-registration succeeded, False otherwise
+        """
+        try:
+            self.client.register(self.instance)
+            self._registered = True
+            logger.info(f"Re-registered {self.instance.instance_id} with Eureka")
+            return True
+        except Exception as e:
+            self._registered = False
+            logger.warning(f"Re-registration failed: {e}")
+            return False
+
     def _heartbeat_loop(self) -> None:
         """
         Background thread that sends periodic heartbeats to Eureka.
@@ -108,12 +125,26 @@ class EurekaRegistry:
         - Sends heartbeat every renewal_interval_in_secs (default: 30s)
         - Logs warnings on failure but doesn't crash
         - Uses exponential backoff on consecutive failures
+        - Re-registers on 404 (instance evicted or Eureka restarted)
+        - Retries registration if initial registration failed (fail_fast=False)
         """
-        interval = self.instance.lease_info.renewal_interval_in_secs
+        normal_interval = self.instance.lease_info.renewal_interval_in_secs
+        interval = normal_interval
         consecutive_failures = 0
 
         while not self._stop_heartbeat.wait(timeout=interval):
             try:
+                if not self._registered:
+                    # Not registered yet (initial registration failed with fail_fast=False)
+                    if self._attempt_reregistration():
+                        consecutive_failures = 0
+                        interval = normal_interval
+                    else:
+                        consecutive_failures += 1
+                        backoff_multiplier = min(1.5 ** (consecutive_failures - 1), 2.0)
+                        interval = normal_interval * backoff_multiplier
+                    continue
+
                 self.client.send_heartbeat(
                     app_name=self.instance.app,
                     instance_id=self.instance.instance_id
@@ -123,6 +154,20 @@ class EurekaRegistry:
                 if consecutive_failures > 0:
                     logger.info("Heartbeat recovered after failures")
                     consecutive_failures = 0
+                    interval = normal_interval
+
+            except EurekaInstanceNotFoundError:
+                logger.warning(
+                    "Instance not found in Eureka (evicted or server restarted), attempting re-registration"
+                )
+                self._registered = False
+                if self._attempt_reregistration():
+                    consecutive_failures = 0
+                    interval = normal_interval
+                else:
+                    consecutive_failures += 1
+                    backoff_multiplier = min(1.5 ** (consecutive_failures - 1), 2.0)
+                    interval = normal_interval * backoff_multiplier
 
             except EurekaHeartbeatError as e:
                 consecutive_failures += 1
@@ -132,10 +177,7 @@ class EurekaRegistry:
 
                 # Exponential backoff on failures, but cap at 2x the normal interval
                 backoff_multiplier = min(1.5 ** (consecutive_failures - 1), 2.0)
-                interval = self.instance.lease_info.renewal_interval_in_secs * backoff_multiplier
-
-                # Don't crash the app on heartbeat failure - Eureka will eventually evict
-                # the instance if heartbeats stop, but the app can keep serving requests
+                interval = normal_interval * backoff_multiplier
 
             except Exception as e:
                 logger.error(f"Unexpected error in heartbeat thread: {e}", exc_info=True)
@@ -168,24 +210,22 @@ class EurekaRegistry:
         Gracefully shutdown: stop heartbeat and deregister from Eureka.
         Called automatically on process exit via atexit.
         """
-        if not self._registered:
-            return
-
         logger.info(f"Shutting down Eureka registry for {self.instance.instance_id}")
 
-        # Stop heartbeat thread
+        # Always stop heartbeat thread (even if not registered)
         self._stop_heartbeat.set()
         if self._heartbeat_thread:
             self._heartbeat_thread.join(timeout=5)
 
-        # Deregister from Eureka
-        try:
-            self.client.deregister(
-                app_name=self.instance.app,
-                instance_id=self.instance.instance_id
-            )
-            self._registered = False
-        except Exception as e:
-            logger.error(f"Failed to deregister from Eureka: {e}")
+        # Only deregister if currently registered
+        if self._registered:
+            try:
+                self.client.deregister(
+                    app_name=self.instance.app,
+                    instance_id=self.instance.instance_id
+                )
+                self._registered = False
+            except Exception as e:
+                logger.error(f"Failed to deregister from Eureka: {e}")
 
         logger.info("Eureka registry shutdown complete")

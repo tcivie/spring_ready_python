@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 from urllib.parse import urljoin
 
 from spring_ready.eureka.instance import InstanceInfo, InstanceStatus
-from ..exceptions import EurekaRegistrationError, EurekaHeartbeatError, ServiceDiscoveryError
+from ..exceptions import EurekaRegistrationError, EurekaHeartbeatError, EurekaInstanceNotFoundError, ServiceDiscoveryError
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,12 @@ class EurekaClient:
                 if response.status_code in [200, 204]:
                     return response
 
+                # 404 means instance not found — no point failing over since Eureka servers replicate
+                if response.status_code == 404:
+                    raise EurekaInstanceNotFoundError(
+                        f"Instance not found (404) at {url} — instance was evicted or Eureka restarted"
+                    )
+
                 # Log non-success but don't fail immediately
                 logger.warning(
                     f"Eureka request to {url} returned status {response.status_code}"
@@ -179,6 +185,8 @@ class EurekaClient:
 
             logger.debug(f"Heartbeat sent for {instance_id}")
 
+        except EurekaInstanceNotFoundError:
+            raise
         except Exception as e:
             raise EurekaHeartbeatError(
                 f"Failed to send heartbeat: {e}"

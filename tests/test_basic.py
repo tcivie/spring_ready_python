@@ -5,10 +5,20 @@ Run with: pytest tests/
 """
 
 import pytest
+from unittest.mock import MagicMock, patch, PropertyMock
+import threading
+
 from spring_ready.eureka.instance import InstanceInfo, InstanceStatus
+from spring_ready.eureka.client import EurekaClient
+from spring_ready.eureka.registry import EurekaRegistry
 from spring_ready.retry import RetryConfig, retry_with_backoff
 from spring_ready.actuator.health import HealthEndpoint, HealthStatus
 from spring_ready.actuator.info import InfoEndpoint
+from spring_ready.exceptions import (
+    EurekaHeartbeatError,
+    EurekaInstanceNotFoundError,
+    EurekaRegistrationError,
+)
 
 
 class TestInstanceInfo:
@@ -153,3 +163,202 @@ class TestInfoEndpoint:
 
         assert "custom" in result
         assert result["custom"]["key"] == "value"
+
+
+class TestEurekaInstanceNotFoundError:
+    """Test the EurekaInstanceNotFoundError exception hierarchy"""
+
+    def test_is_subclass_of_heartbeat_error(self):
+        assert issubclass(EurekaInstanceNotFoundError, EurekaHeartbeatError)
+
+    def test_caught_by_heartbeat_error_handler(self):
+        with pytest.raises(EurekaHeartbeatError):
+            raise EurekaInstanceNotFoundError("instance gone")
+
+    def test_distinguishable_from_heartbeat_error(self):
+        err = EurekaInstanceNotFoundError("instance gone")
+        assert isinstance(err, EurekaInstanceNotFoundError)
+        assert isinstance(err, EurekaHeartbeatError)
+
+
+class TestEurekaClient404Detection:
+    """Test that _request detects 404 and send_heartbeat propagates it"""
+
+    def _make_client(self):
+        return EurekaClient(eureka_servers=["http://localhost:8761/eureka/"])
+
+    @patch("spring_ready.eureka.client.requests.request")
+    def test_request_raises_instance_not_found_on_404(self, mock_request):
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_request.return_value = mock_response
+
+        client = self._make_client()
+
+        with pytest.raises(EurekaInstanceNotFoundError):
+            client._request("PUT", "/apps/MY-APP/my-instance")
+
+    @patch("spring_ready.eureka.client.requests.request")
+    def test_request_does_not_failover_on_404(self, mock_request):
+        """404 should raise immediately, not try next server"""
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_request.return_value = mock_response
+
+        client = EurekaClient(
+            eureka_servers=[
+                "http://eureka1:8761/eureka/",
+                "http://eureka2:8761/eureka/",
+            ]
+        )
+
+        with pytest.raises(EurekaInstanceNotFoundError):
+            client._request("PUT", "/apps/MY-APP/my-instance")
+
+        # Only one request made — no failover
+        assert mock_request.call_count == 1
+
+    @patch("spring_ready.eureka.client.requests.request")
+    def test_send_heartbeat_propagates_instance_not_found(self, mock_request):
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_request.return_value = mock_response
+
+        client = self._make_client()
+
+        with pytest.raises(EurekaInstanceNotFoundError):
+            client.send_heartbeat("MY-APP", "my-instance")
+
+    @patch("spring_ready.eureka.client.requests.request")
+    def test_send_heartbeat_wraps_other_errors(self, mock_request):
+        """Non-404 errors should still be wrapped in EurekaHeartbeatError"""
+        mock_request.side_effect = ConnectionError("connection refused")
+
+        client = self._make_client()
+
+        with pytest.raises(EurekaHeartbeatError):
+            client.send_heartbeat("MY-APP", "my-instance")
+
+
+class TestEurekaRegistryReconnection:
+    """Test reconnection logic in EurekaRegistry"""
+
+    def _make_instance(self):
+        return InstanceInfo.create(app_name="test-app", port=8080)
+
+    def _make_registry(self, instance=None):
+        registry = EurekaRegistry(
+            eureka_servers=["http://localhost:8761/eureka/"],
+            instance_info=instance or self._make_instance(),
+            retry_config=RetryConfig(max_attempts=1, initial_interval=0.01),
+            fail_fast=False,
+        )
+        return registry
+
+    def test_attempt_reregistration_success(self):
+        registry = self._make_registry()
+        registry.client.register = MagicMock()
+
+        result = registry._attempt_reregistration()
+
+        assert result is True
+        assert registry._registered is True
+        registry.client.register.assert_called_once_with(registry.instance)
+
+    def test_attempt_reregistration_failure(self):
+        registry = self._make_registry()
+        registry.client.register = MagicMock(side_effect=EurekaRegistrationError("down"))
+
+        result = registry._attempt_reregistration()
+
+        assert result is False
+        assert registry._registered is False
+
+    @patch("spring_ready.eureka.client.requests.request")
+    def test_start_always_starts_heartbeat_thread(self, mock_request):
+        """Heartbeat thread should start even if initial registration fails"""
+        mock_request.side_effect = ConnectionError("Eureka down")
+
+        registry = self._make_registry()
+        registry.instance.lease_info.renewal_interval_in_secs = 0.01
+        registry.start()
+
+        assert registry._registered is False
+        assert registry._heartbeat_thread is not None
+        assert registry._heartbeat_thread.is_alive()
+
+        # Clean up
+        registry.shutdown()
+
+    def test_shutdown_stops_thread_when_unregistered(self):
+        """shutdown() should stop heartbeat thread even when not registered"""
+        registry = self._make_registry()
+        registry._registered = False
+        registry.instance.lease_info.renewal_interval_in_secs = 0.01
+
+        # Mock register to keep failing (so loop stays in retry mode)
+        registry.client.register = MagicMock(side_effect=EurekaRegistrationError("down"))
+        registry.client.deregister = MagicMock()
+
+        # Manually start a heartbeat thread
+        registry._stop_heartbeat.clear()
+        registry._heartbeat_thread = threading.Thread(
+            target=registry._heartbeat_loop,
+            daemon=True,
+        )
+        registry._heartbeat_thread.start()
+
+        registry.shutdown()
+
+        assert not registry._heartbeat_thread.is_alive()
+        registry.client.deregister.assert_not_called()
+
+    def test_heartbeat_loop_retries_registration_when_unregistered(self):
+        """When not registered, heartbeat loop should attempt registration"""
+        registry = self._make_registry()
+        registry._registered = False
+        registry.instance.lease_info.renewal_interval_in_secs = 0.01
+
+        attempt_count = [0]
+
+        def mock_register(instance):
+            attempt_count[0] += 1
+            if attempt_count[0] < 2:
+                raise EurekaRegistrationError("still down")
+            # Second attempt succeeds — stop the loop after
+
+        def mock_heartbeat(app_name, instance_id):
+            # Once registered, first heartbeat stops the loop
+            registry._stop_heartbeat.set()
+
+        registry.client.register = mock_register
+        registry.client.send_heartbeat = mock_heartbeat
+
+        registry._heartbeat_loop()
+
+        assert attempt_count[0] == 2
+        assert registry._registered is True
+
+    def test_heartbeat_loop_reregisters_on_404(self):
+        """On EurekaInstanceNotFoundError, loop should re-register"""
+        registry = self._make_registry()
+        registry._registered = True
+        registry.instance.lease_info.renewal_interval_in_secs = 0.01
+
+        heartbeat_calls = [0]
+
+        def mock_heartbeat(app_name, instance_id):
+            heartbeat_calls[0] += 1
+            if heartbeat_calls[0] == 1:
+                raise EurekaInstanceNotFoundError("evicted")
+            # Second call succeeds — stop the loop
+            registry._stop_heartbeat.set()
+
+        registry.client.send_heartbeat = mock_heartbeat
+        registry.client.register = MagicMock()  # Re-registration succeeds
+
+        registry._heartbeat_loop()
+
+        assert heartbeat_calls[0] == 2
+        registry.client.register.assert_called_once()
+        assert registry._registered is True

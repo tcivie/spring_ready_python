@@ -16,6 +16,11 @@ class EurekaHeartbeatError(SpringReadyException):
     pass
 
 
+class EurekaInstanceNotFoundError(EurekaHeartbeatError):
+    """Raised when Eureka returns 404 for an instance (evicted or server restarted)"""
+    pass
+
+
 class ConfigServerError(SpringReadyException):
     """Raised when Config Server is unreachable or returns invalid config"""
     pass

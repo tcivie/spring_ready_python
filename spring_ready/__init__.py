@@ -18,6 +18,8 @@ from .core import SpringReadyApp
 from .exceptions import (
     SpringReadyException,
     EurekaRegistrationError,
+    EurekaHeartbeatError,
+    EurekaInstanceNotFoundError,
     ConfigServerError,
 )
 
@@ -26,5 +28,7 @@ __all__ = [
     "SpringReadyApp",
     "SpringReadyException",
     "EurekaRegistrationError",
+    "EurekaHeartbeatError",
+    "EurekaInstanceNotFoundError",
     "ConfigServerError",
 ]
