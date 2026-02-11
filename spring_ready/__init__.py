@@ -23,7 +23,7 @@ from .exceptions import (
     ConfigServerError,
 )
 
-__version__ = "1.1.0"
+__version__ = "1.1.2"
 __all__ = [
     "SpringReadyApp",
     "SpringReadyException",
